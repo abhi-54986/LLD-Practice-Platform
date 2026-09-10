@@ -1,5 +1,7 @@
 import "dotenv/config";
+import { Types } from "mongoose";
 import { connectToDatabase, disconnectFromDatabase } from "../config/database.js";
+import { Learner } from "../models/Learner.js";
 import { Problem } from "../models/Problem.js";
 
 type SeedProblem = {
@@ -83,6 +85,12 @@ async function seed(): Promise<void> {
   await connectToDatabase();
 
   try {
+    await Learner.updateOne(
+      { _id: new Types.ObjectId("000000000000000000000001") },
+      { $set: { displayName: "Demo Learner" } },
+      { upsert: true },
+    );
+
     await Problem.bulkWrite(
       problems.map((problem) => ({
         updateOne: {
@@ -93,6 +101,7 @@ async function seed(): Promise<void> {
       })),
     );
 
+    console.log("Seeded Demo Learner.");
     console.log(`Seeded ${problems.length} problems.`);
     console.log(
       "Additional problem: Hotel Reservation System, chosen to cover date-range availability and configurable pricing.",
