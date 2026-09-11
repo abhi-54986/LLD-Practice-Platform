@@ -53,6 +53,23 @@ export class SubmissionService {
     return { status: submission.status, evaluation: evaluation ?? undefined };
   }
 
+  async retryEvaluation(submissionId: string): Promise<void> {
+    this.assertObjectId(submissionId, "submissionId");
+
+    const submission = await Submission.findById(submissionId);
+    if (!submission) {
+      throw new AppError(404, "SUBMISSION_NOT_FOUND", "Submission not found");
+    }
+    if (submission.status !== "Failed") {
+      throw new AppError(409, "INVALID_SUBMISSION_STATE", "Evaluation retry is only available for failed submissions");
+    }
+
+    await Submission.updateOne(
+      { _id: submissionId },
+      { $set: { status: "Evaluating" }, $unset: { failureReason: 1 } },
+    );
+  }
+
   private assertObjectId(value: string, field: string): void {
     if (!Types.ObjectId.isValid(value)) {
       throw new AppError(400, "INVALID_ID", `Invalid ${field}`);

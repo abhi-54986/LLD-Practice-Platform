@@ -1,6 +1,6 @@
 import { Schema, model } from "mongoose";
 
-const ProblemSchema = new Schema(
+export const ProblemSchema = new Schema(
   {
     slug: { type: String, required: true, unique: true, index: true },
     title: { type: String, required: true },

@@ -1,6 +1,6 @@
 import { Schema, model } from "mongoose";
 
-const SubmissionSchema = new Schema(
+export const SubmissionSchema = new Schema(
   {
     attemptId: { type: Schema.Types.ObjectId, ref: "Attempt", required: true, unique: true },
     contentType: { type: String, enum: ["text"], default: "text" },

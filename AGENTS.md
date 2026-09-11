@@ -10,6 +10,6 @@ Read these before writing any code, in this order:
 - Never invent a decision not already in DESIGN_NOTE.md. If something genuinely isn't covered, stop and ask instead of guessing.
 - Match the Mongoose schemas in DESIGN_NOTE.md §3.2 field-for-field, including indexes.
 - Match the API table in §6 route-for-route, including status codes and the shared error shape.
-- Follow the evaluation interfaces in §4 (IEvaluator, IEvaluationInput, EvaluatorFactory) exactly — don't hardcode the Claude call directly into a service or controller.
+- Follow the evaluation interfaces in §4 (IEvaluator, IEvaluationInput, EvaluatorFactory) exactly — don't hardcode the Gemini call directly into a service or controller.
 - Frontend must use the tokens and components from UIUX_DESIGN.md §2–§3, not default component-library styling.
 - Build strictly in the phase order given in each task prompt — don't jump ahead to a later phase in the same session.

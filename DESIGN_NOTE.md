@@ -11,7 +11,7 @@
 |---|---|---|
 | A1 | Submission format | **Structured text only** (Markdown with required sections). No diagram/code submission in MVP. |
 | A2 | Auth | **Single mock learner**, no signup/login flow. A `X-Learner-Id` header (defaulted client-side) stands in for a session. Data model is ref-ready for real auth later. |
-| A3 | AI evaluator | **One Claude API call per submission**, structured JSON output, fixed rubric. No multi-agent pipeline. |
+| A3 | AI evaluator | **One Gemini API call per submission using `gemini-3.6-flash`**, structured JSON output, fixed rubric. No multi-agent pipeline. |
 | A4 | Async model | **In-process job runner** (no Redis/BullMQ for MVP) — evaluation runs on `setImmediate` after the HTTP response returns. Client polls submission status. |
 | A5 | Seed data | **5 hardcoded problems**, inserted by a seed script. No admin UI to author problems. |
 | A6 | Attempt : Submission | **1 : 1.** Starting a new attempt is how a learner "retries" — there is no draft/multi-submission-per-attempt concept in MVP. |
@@ -29,7 +29,7 @@ flowchart LR
     D --> E{Deterministic<br/>checks pass?}
     E -- No --> C
     E -- Yes --> F[Status: Evaluating]
-    F --> G[AI Evaluation<br/>Claude API + fixed rubric]
+    F --> G[AI Evaluation<br/>Gemini API + fixed rubric]
     G --> H[Status: Completed]
     H --> I[View Feedback<br/>score + evidence + suggestion per dimension]
     I --> J[Attempt History<br/>same problem + across problems]
@@ -203,13 +203,13 @@ class DeterministicChecker {
 
 // evaluation/AIEvaluator.ts
 class AIEvaluator implements IEvaluator {
-  constructor(private checker: DeterministicChecker, private claudeClient: ClaudeClient) {}
+  constructor(private checker: DeterministicChecker, private geminiClient: GeminiClient) {}
   async evaluate(input: IEvaluationInput): Promise<EvaluationResult> {
     const checks = this.checker.check(input.getEvaluableText());
     if (!allRequiredChecksPass(checks)) {
       return { evaluatorType: "deterministic-only", deterministicChecks: checks, failureReason: "Missing required sections" };
     }
-    const raw = await this.claudeClient.evaluate(RUBRIC_V1, input);
+    const raw = await this.geminiClient.evaluate(RUBRIC_V1, input);
     return { evaluatorType: "ai", deterministicChecks: checks, ...parseAndValidate(raw) };
   }
 }
@@ -218,7 +218,7 @@ class AIEvaluator implements IEvaluator {
 class EvaluatorFactory {
   static get(evaluatorType: "ai" /* | "rule-based" | "human" later */): IEvaluator {
     switch (evaluatorType) {
-      case "ai": return new AIEvaluator(new DeterministicChecker(), claudeClient);
+      case "ai": return new AIEvaluator(new DeterministicChecker(), geminiClient);
       // case "rule-based": return new RuleBasedEvaluator(...);   // add later, no other file changes
       // case "human": return new HumanReviewEvaluator(...);      // add later, no other file changes
     }
@@ -261,7 +261,7 @@ class EvaluationWorker {
 ## 5. Evaluation Approach
 
 ### 5.1 Deterministic checks (run first, free, no LLM cost)
-The submission text is parsed for required Markdown headers before anything is sent to Claude:
+The submission text is parsed for required Markdown headers before anything is sent to Gemini:
 - `## Requirements Understanding`
 - `## Classes & Responsibilities`
 - `## Relationships`
@@ -291,7 +291,7 @@ Each dimension always returns `{ dimension, score (1–5), evidence, concern, su
 - On a JSON parse failure, retry the call once with the same input; on a second failure, mark `Failed` with `failureReason: "Evaluator error — retry available"` and expose the retry endpoint.
 
 ### 5.4 What's deterministic vs. AI (recap)
-| Deterministic | AI (Claude) |
+| Deterministic | AI (Gemini) |
 |---|---|
 | Required sections present | Class responsibility quality |
 | Minimum length | Coupling / cohesion judgment |
@@ -333,7 +333,7 @@ stateDiagram-v2
 
 **Idempotency / duplicate handling:** the unique index on `Submission.attemptId` means a second `POST /attempts/:id/submissions` on an attempt that already has a non-Failed submission returns `409 Conflict` instead of creating a duplicate. The unique index on `idempotencyKey` additionally absorbs a literal double-click / network-retry of the exact same request.
 
-**Not blocking on slow AI:** `POST /submissions` returns `202 Accepted` with the submission in `Submitted` state the instant it's written to Mongo — the HTTP request never waits on the Claude API call. The client polls `GET /submissions/:id` (2s interval, capped at ~30s before showing a "still working" state) until `Completed` or `Failed`.
+**Not blocking on slow AI:** `POST /submissions` returns `202 Accepted` with the submission in `Submitted` state the instant it's written to Mongo — the HTTP request never waits on the Gemini API call. The client polls `GET /submissions/:id` (2s interval, capped at ~30s before showing a "still working" state) until `Completed` or `Failed`.
 
 ---
 
@@ -354,7 +354,7 @@ Implement `RuleBasedEvaluator implements IEvaluator` or `HumanReviewEvaluator im
 
 ## 9. Scale & Reliability (light HLD, as the brief asks — not a distributed-systems exercise)
 
-- **First thing to separate if this grows:** the `EvaluationWorker` out of the API process into its own worker process consuming a real queue (BullMQ + Redis), because Claude API latency (seconds) is the one variable-cost operation in the system and shouldn't share a process/CPU budget with request handling.
+- **First thing to separate if this grows:** the `EvaluationWorker` out of the API process into its own worker process consuming a real queue (BullMQ + Redis), because Gemini API latency (seconds) is the one variable-cost operation in the system and shouldn't share a process/CPU budget with request handling.
 - **If AI evaluation is slow:** already non-blocking (§7) — this holds regardless of scale, it's a request-response design choice, not a scaling one.
 - **If load grows:** `Problem` reads are cacheable (rarely change) — an in-memory cache or Redis in front of `GET /api/problems` is the next-cheapest win before touching the write path.
 - **Duplicate processing:** already handled at MVP scale via the unique indexes in §7; at real scale this becomes a queue-level dedup key instead of a DB unique index, same idea.
@@ -366,12 +366,12 @@ Implement `RuleBasedEvaluator implements IEvaluator` or `HumanReviewEvaluator im
 | Layer | What's covered |
 |---|---|
 | Unit — `DeterministicChecker` | Each required section present/missing, min-length boundary |
-| Unit — `AIEvaluator` | Mocked Claude client: valid JSON parsed correctly; malformed JSON triggers one retry then `Failed`; deterministic failure short-circuits before any Claude call is made |
+| Unit — `AIEvaluator` | Mocked Gemini client: valid JSON parsed correctly; malformed JSON triggers one retry then `Failed`; deterministic failure short-circuits before any Gemini call is made |
 | Unit — state machine | Every legal transition in §7; every illegal transition (e.g. `Completed → Evaluating`) throws |
 | Integration — API | Full submit → poll → Completed happy path against a running Mongo (via `mongodb-memory-server`) |
 | Integration — idempotency | Duplicate `idempotencyKey`; second submit on an attempt that already has an active submission → both return `409` |
 | Edge case | Empty/whitespace-only submission → `400` before any DB write |
-| Edge case | Claude API throws/times out → submission ends in `Failed` with a retry available, never stuck in `Evaluating` forever (add a max-evaluating-duration safety check in the worker) |
+| Edge case | Gemini API throws/times out → submission ends in `Failed` with a retry available, never stuck in `Evaluating` forever (add a max-evaluating-duration safety check in the worker) |
 
 ---
 

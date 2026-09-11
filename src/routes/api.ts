@@ -4,6 +4,7 @@ import { AppError } from "../errors/AppError.js";
 import { AttemptService } from "../services/AttemptService.js";
 import { SubmissionService } from "../services/SubmissionService.js";
 import { Problem } from "../models/Problem.js";
+import { evaluationWorker } from "../workers/EvaluationWorker.js";
 
 const DEFAULT_LEARNER_ID = new Types.ObjectId("000000000000000000000001").toString();
 const attemptService = new AttemptService();
@@ -58,11 +59,19 @@ router.post("/attempts/:id/submissions", asyncHandler(async (req, res) => {
     throw new AppError(400, "INVALID_REQUEST", "content and idempotencyKey are required strings");
   }
   const submission = await submissionService.submit(routeParam(req, "id"), content, idempotencyKey);
+  setImmediate(() => void evaluationWorker.run(submission._id.toString()));
   res.status(202).json({ submissionId: submission._id, status: submission.status });
 }));
 
 router.get("/submissions/:id", asyncHandler(async (req, res) => {
   res.json(await submissionService.getStatus(routeParam(req, "id")));
+}));
+
+router.post("/submissions/:id/retry-evaluation", asyncHandler(async (req, res) => {
+  const submissionId = routeParam(req, "id");
+  await submissionService.retryEvaluation(submissionId);
+  setImmediate(() => void evaluationWorker.run(submissionId));
+  res.status(202).json({ status: "Evaluating" });
 }));
 
 function getLearnerId(req: Request): string {
