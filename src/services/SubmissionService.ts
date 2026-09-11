@@ -50,7 +50,11 @@ export class SubmissionService {
     }
 
     const evaluation = await Evaluation.findOne({ submissionId });
-    return { status: submission.status, evaluation: evaluation ?? undefined };
+    return {
+      status: submission.status,
+      failureReason: submission.failureReason,
+      evaluation: evaluation ?? undefined,
+    };
   }
 
   async retryEvaluation(submissionId: string): Promise<void> {

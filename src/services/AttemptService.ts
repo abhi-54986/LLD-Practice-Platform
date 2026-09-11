@@ -1,7 +1,9 @@
 import { Types } from "mongoose";
 import { AppError } from "../errors/AppError.js";
 import { Attempt } from "../models/Attempt.js";
+import { Evaluation } from "../models/Evaluation.js";
 import { Problem } from "../models/Problem.js";
+import { Submission } from "../models/Submission.js";
 
 export class AttemptService {
   async startAttempt(learnerId: string, problemId: string) {
@@ -46,13 +48,23 @@ export class AttemptService {
     }
 
     const attempts = await Attempt.find(query)
+      .populate("problemId")
       .sort({ startedAt: -1, _id: -1 })
       .limit(limit + 1);
     const hasMore = attempts.length > limit;
     const items = hasMore ? attempts.slice(0, limit) : attempts;
 
+    const enrichedItems = await Promise.all(items.map(async (attempt) => {
+      const submission = await Submission.findOne({ attemptId: attempt._id });
+      const evaluation = submission
+        ? await Evaluation.findOne({ submissionId: submission._id })
+        : null;
+      const attemptData = attempt.toObject();
+      return { ...attemptData, problem: attemptData.problemId, submission, evaluation };
+    }));
+
     return {
-      items,
+      items: enrichedItems,
       nextCursor: hasMore ? this.encodeCursor(items[items.length - 1]) : undefined,
     };
   }
