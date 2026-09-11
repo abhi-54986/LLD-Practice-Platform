@@ -3,6 +3,7 @@ import { AppError } from "../errors/AppError.js";
 import { Evaluation } from "../models/Evaluation.js";
 import { Attempt } from "../models/Attempt.js";
 import { Submission } from "../models/Submission.js";
+import { transitionSubmission } from "./SubmissionStateMachine.js";
 
 export class SubmissionService {
   async submit(attemptId: string, content: string, idempotencyKey: string) {
@@ -68,6 +69,7 @@ export class SubmissionService {
       throw new AppError(409, "INVALID_SUBMISSION_STATE", "Evaluation retry is only available for failed submissions");
     }
 
+    transitionSubmission("Failed", "Evaluating");
     await Submission.updateOne(
       { _id: submissionId },
       { $set: { status: "Evaluating" }, $unset: { failureReason: 1 } },

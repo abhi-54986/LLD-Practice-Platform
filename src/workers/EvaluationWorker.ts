@@ -5,6 +5,7 @@ import { Submission } from "../models/Submission.js";
 import { EVALUATION_TIMEOUT_MS } from "../config/ai.js";
 import { EvaluatorFactory } from "../evaluation/EvaluatorFactory.js";
 import { TextSubmissionInput } from "../evaluation/TextSubmissionInput.js";
+import { transitionSubmission } from "../services/SubmissionStateMachine.js";
 
 export class EvaluationWorker {
   async run(submissionId: string): Promise<void> {
@@ -26,7 +27,7 @@ export class EvaluationWorker {
 
       const submission = await Submission.findByIdAndUpdate(
         submissionId,
-        { $set: { status: "Evaluating" } },
+        { $set: { status: transitionSubmission("Submitted", "Evaluating") } },
         { new: true },
       );
       if (!submission) {
@@ -65,10 +66,10 @@ export class EvaluationWorker {
       if (result.evaluatorType === "deterministic-only") {
         await Submission.updateOne(
           { _id: submissionId },
-          { $set: { status: "Failed", failureReason: result.failureReason ?? "Deterministic checks failed" } },
+          { $set: { status: transitionSubmission("Evaluating", "Failed"), failureReason: result.failureReason ?? "Deterministic checks failed" } },
         );
       } else {
-        await Submission.updateOne({ _id: submissionId }, { $set: { status: "Completed" }, $unset: { failureReason: 1 } });
+        await Submission.updateOne({ _id: submissionId }, { $set: { status: transitionSubmission("Evaluating", "Completed") }, $unset: { failureReason: 1 } });
       }
     } catch (error: unknown) {
       const failureReason = error instanceof Error ? error.message : "Evaluator error - retry available";
