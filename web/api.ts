@@ -12,6 +12,32 @@ export type Attempt = {
   _id: string;
   problemId: string;
   status: string;
+  startedAt: string;
+  problem?: Problem;
+  submission?: { _id: string; status: string };
+  evaluation?: Evaluation;
+};
+
+export type DimensionScore = {
+  dimension: string;
+  score: number;
+  evidence: string;
+  concern?: string;
+  suggestion: string;
+};
+
+export type Evaluation = {
+  evaluatorType: "ai" | "deterministic-only";
+  deterministicChecks: Record<string, boolean>;
+  dimensionScores?: DimensionScore[];
+  overallSummary?: string;
+  confidence?: number;
+};
+
+export type SubmissionStatus = {
+  status: "Submitted" | "Evaluating" | "Completed" | "Failed";
+  failureReason?: string;
+  evaluation?: Evaluation;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -32,8 +58,9 @@ export function getProblem(id: string): Promise<Problem> {
   return request<Problem>(`/api/problems/${id}`);
 }
 
-export async function getAttempts(problemId: string): Promise<Attempt[]> {
-  const response = await request<{ items: Attempt[] }>(`/api/attempts?problemId=${encodeURIComponent(problemId)}`);
+export async function getAttempts(problemId?: string): Promise<Attempt[]> {
+  const query = problemId ? `?problemId=${encodeURIComponent(problemId)}` : "";
+  const response = await request<{ items: Attempt[] }>(`/api/attempts${query}`);
   return response.items;
 }
 
@@ -51,4 +78,12 @@ export function submitDesign(attemptId: string, content: string): Promise<{ subm
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ content, idempotencyKey: crypto.randomUUID() }),
   });
+}
+
+export function getSubmissionStatus(id: string): Promise<SubmissionStatus> {
+  return request<SubmissionStatus>(`/api/submissions/${id}`);
+}
+
+export function retryEvaluation(id: string): Promise<{ status: string }> {
+  return request(`/api/submissions/${id}/retry-evaluation`, { method: "POST" });
 }

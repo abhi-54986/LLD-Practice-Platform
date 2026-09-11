@@ -1,188 +1,70 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Panel, StatusPill, Textarea } from "./components";
-import { getAttempts, getProblem, getProblems, Problem, startAttempt, submitDesign } from "./api";
+import { Evaluation, getAttempts, getProblem, getProblems, getSubmissionStatus, Problem, retryEvaluation, startAttempt, submitDesign, SubmissionStatus } from "./api";
 
-const scaffold = `## Requirements Understanding
-
-## Classes & Responsibilities
-
-## Relationships
-
-## Trade-offs & Assumptions
-`;
-
-const requiredSections = [
-  "Requirements Understanding",
-  "Classes & Responsibilities",
-  "Relationships",
-  "Trade-offs & Assumptions",
-];
+const scaffold = `## Requirements Understanding\n\n## Classes & Responsibilities\n\n## Relationships\n\n## Trade-offs & Assumptions\n`;
+const requiredSections = ["Requirements Understanding", "Classes & Responsibilities", "Relationships", "Trade-offs & Assumptions"];
+const rubricOrder = ["Requirement understanding", "Class responsibilities", "Coupling / cohesion", "Encapsulation & interfaces", "Abstraction / pattern use", "Extensibility", "Edge cases & testability", "Quality of explanation"];
+type Screen = { type: "list" } | { type: "workspace"; problemId: string } | { type: "status"; problemId: string; submissionId: string } | { type: "feedback"; problemId: string; evaluation: Evaluation } | { type: "history" };
 
 export function App() {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [screen, setScreen] = useState<Screen>({ type: "list" });
   const [difficulty, setDifficulty] = useState("All");
   const [tag, setTag] = useState("All");
   const [mobileRailOpen, setMobileRailOpen] = useState(false);
-  const selectedProblem = selectedId ? <Workspace key={selectedId} problemId={selectedId} onBack={() => setSelectedId(null)} /> : null;
-
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <button className="brand" onClick={() => setSelectedId(null)} aria-label="Go to problem list">
-          <span className="brand-mark">LLD</span>
-          <span>Practice review</span>
-        </button>
-        {selectedId && (
-          <Button variant="secondary" className="mobile-menu" onClick={() => setMobileRailOpen(!mobileRailOpen)}>
-            Problems
-          </Button>
-        )}
-        <nav className="topnav" aria-label="Main navigation">
-          <span className="topnav__current">Problems</span>
-          <span>Single learner</span>
-        </nav>
-      </header>
-      <div className={`workspace-layout ${mobileRailOpen ? "workspace-layout--rail-open" : ""}`}>
-        <ProblemRail selectedId={selectedId} difficulty={difficulty} tag={tag} onDifficultyChange={setDifficulty} onTagChange={setTag} onSelect={(id) => { setSelectedId(id); setMobileRailOpen(false); }} />
-        {selectedProblem ?? <ProblemList difficulty={difficulty} tag={tag} onSelect={setSelectedId} />}
-        {selectedId && <div className="workspace-layout__empty" aria-hidden="true" />}
-      </div>
-    </div>
-  );
+  const openProblem = (problemId: string) => { setScreen({ type: "workspace", problemId }); setMobileRailOpen(false); };
+  const selectedId = screen.type === "list" || screen.type === "history" ? null : screen.problemId;
+  return <div className="app-shell">
+    <header className="topbar"><button className="brand" onClick={() => setScreen({ type: "list" })} aria-label="Go to problem list"><span className="brand-mark">LLD</span><span>Practice review</span></button>{selectedId && <Button variant="secondary" className="mobile-menu" onClick={() => setMobileRailOpen(!mobileRailOpen)}>Problems</Button>}<nav className="topnav" aria-label="Main navigation"><button className="topnav__button topnav__current" onClick={() => setScreen({ type: "list" })}>Problems</button><button className="topnav__button" onClick={() => setScreen({ type: "history" })}>Attempt history</button></nav></header>
+    <div className={`workspace-layout ${mobileRailOpen ? "workspace-layout--rail-open" : ""}`}><ProblemRail selectedId={selectedId} difficulty={difficulty} tag={tag} onDifficultyChange={setDifficulty} onTagChange={setTag} onSelect={openProblem} />{screen.type === "list" && <ProblemList difficulty={difficulty} tag={tag} onSelect={openProblem} />}{screen.type === "workspace" && <Workspace problemId={screen.problemId} onBack={() => setScreen({ type: "list" })} onSubmitted={(submissionId) => setScreen({ type: "status", problemId: screen.problemId, submissionId })} />}{screen.type === "status" && <SubmissionStatusScreen submissionId={screen.submissionId} onFeedback={(evaluation) => setScreen({ type: "feedback", problemId: screen.problemId, evaluation })} onNewAttempt={() => setScreen({ type: "workspace", problemId: screen.problemId })} />}{screen.type === "feedback" && <FeedbackScreen evaluation={screen.evaluation} onTryAgain={() => setScreen({ type: "workspace", problemId: screen.problemId })} />}{screen.type === "history" && <HistoryScreen onSelect={openProblem} />}{selectedId && <div className="workspace-layout__empty" aria-hidden="true" />}</div>
+  </div>;
 }
 
 function ProblemRail({ selectedId, difficulty, tag, onDifficultyChange, onTagChange, onSelect }: { selectedId: string | null; difficulty: string; tag: string; onDifficultyChange: (value: string) => void; onTagChange: (value: string) => void; onSelect: (id: string) => void }) {
   const [problems, setProblems] = useState<Problem[]>([]);
-  const tags = [...new Set(problems.flatMap((problem) => problem.tags))].sort();
   useEffect(() => { getProblems().then(setProblems).catch(() => undefined); }, []);
-  return (
-    <aside className="context-rail">
-      <div className="rail-heading">
-        <span className="eyebrow">Practice set</span>
-        <strong>{problems.length || "..."} problems</strong>
-      </div>
-      <div className="rail-filter">
-        <label htmlFor="difficulty-filter">Difficulty</label>
-        <select id="difficulty-filter" value={difficulty} onChange={(event) => onDifficultyChange(event.target.value)}>
-          <option>All</option>
-          <option>Easy</option>
-          <option>Medium</option>
-          <option>Hard</option>
-        </select>
-        <label htmlFor="tag-filter">Tag</label>
-        <select id="tag-filter" value={tag} onChange={(event) => onTagChange(event.target.value)}>
-          <option>All</option>
-          {tags.map((value) => <option key={value}>{value}</option>)}
-        </select>
-      </div>
-      <div className="rail-list">
-        {problems.map((problem) => (
-          <button key={problem._id} className={`rail-row ${selectedId === problem._id ? "rail-row--selected" : ""}`} onClick={() => onSelect(problem._id)}>
-            <span>{problem.title}</span>
-            <StatusPill tone={problem.difficulty.toLowerCase()}>{problem.difficulty}</StatusPill>
-          </button>
-        ))}
-      </div>
-    </aside>
-  );
+  const tags = [...new Set(problems.flatMap((problem) => problem.tags))].sort();
+  return <aside className="context-rail"><div className="rail-heading"><span className="eyebrow">Practice set</span><strong>{problems.length || "..."} problems</strong></div><div className="rail-filter"><label htmlFor="difficulty-filter">Difficulty</label><select id="difficulty-filter" value={difficulty} onChange={(event) => onDifficultyChange(event.target.value)}><option>All</option><option>Easy</option><option>Medium</option><option>Hard</option></select><label htmlFor="tag-filter">Tag</label><select id="tag-filter" value={tag} onChange={(event) => onTagChange(event.target.value)}><option>All</option>{tags.map((value) => <option key={value}>{value}</option>)}</select></div><div className="rail-list">{problems.map((problem) => <button key={problem._id} className={`rail-row ${selectedId === problem._id ? "rail-row--selected" : ""}`} onClick={() => onSelect(problem._id)}><span>{problem.title}</span><StatusPill tone={problem.difficulty.toLowerCase()}>{problem.difficulty}</StatusPill></button>)}</div></aside>;
 }
 
 function ProblemList({ difficulty, tag, onSelect }: { difficulty: string; tag: string; onSelect: (id: string) => void }) {
-  const [problems, setProblems] = useState<Problem[]>([]);
-  const [attemptCounts, setAttemptCounts] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const filteredProblems = problems.filter((problem) => (difficulty === "All" || problem.difficulty === difficulty) && (tag === "All" || problem.tags.includes(tag)));
-
-  useEffect(() => {
-    getProblems().then(async (items) => {
-      setProblems(items);
-      const attempts = await Promise.all(items.map(async (problem) => [problem._id, (await getAttempts(problem._id)).length] as const));
-      setAttemptCounts(Object.fromEntries(attempts));
-    }).catch((cause: Error) => setError(cause.message)).finally(() => setLoading(false));
-  }, []);
-
-  return (
-    <main className="primary-surface list-surface">
-      <div className="page-intro">
-        <div>
-          <span className="eyebrow">Design practice</span>
-          <h1>Choose a problem</h1>
-          <p>Work through a low-level design and get evidence-based feedback on your decisions.</p>
-        </div>
-        <span className="list-count">{problems.length ? `${filteredProblems.length} available` : ""}</span>
-      </div>
-      {error && <p className="error-message" role="alert">{error}</p>}
-      {loading ? <LoadingRows /> : filteredProblems.length === 0 ? <p className="empty-state">No problems available yet</p> : (
-        <div className="problem-list" aria-label="Problems">
-          {filteredProblems.map((problem, index) => (
-            <button className="problem-row" key={problem._id} onClick={() => onSelect(problem._id)}>
-              <span className="problem-row__index">{String(index + 1).padStart(2, "0")}</span>
-              <span className="problem-row__main"><strong>{problem.title}</strong><span>{problem.tags.slice(0, 2).join(" · ")}</span></span>
-              <StatusPill tone={problem.difficulty.toLowerCase()}>{problem.difficulty}</StatusPill>
-              <span className="problem-row__stats"><small>Attempts</small><strong>{attemptCounts[problem._id] ?? "—"}</strong></span>
-              <span className="problem-row__stats"><small>Best score</small><strong>{attemptCounts[problem._id] ? "No score yet" : "—"}</strong></span>
-              <span className="row-arrow" aria-hidden="true">↗</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </main>
-  );
+  const [problems, setProblems] = useState<Problem[]>([]); const [attemptCounts, setAttemptCounts] = useState<Record<string, number>>({}); const [bestScores, setBestScores] = useState<Record<string, number>>({}); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
+  useEffect(() => { getProblems().then(async (items) => { setProblems(items); const histories = await Promise.all(items.map(async (problem) => [problem._id, await getAttempts(problem._id)] as const)); setAttemptCounts(Object.fromEntries(histories.map(([id, attempts]) => [id, attempts.length]))); setBestScores(Object.fromEntries(histories.map(([id, attempts]) => { const scores = attempts.flatMap((attempt) => attempt.evaluation?.dimensionScores?.map((score) => score.score) ?? []); return [id, scores.length ? Math.round((scores.reduce((sum, score) => sum + score, 0) / scores.length) * 10) / 10 : 0]; }))); }).catch((cause: Error) => setError(cause.message)).finally(() => setLoading(false)); }, []);
+  const filtered = problems.filter((problem) => (difficulty === "All" || problem.difficulty === difficulty) && (tag === "All" || problem.tags.includes(tag)));
+  return <main className="primary-surface list-surface"><div className="page-intro"><div><span className="eyebrow">Design practice</span><h1>Choose a problem</h1><p>Work through a low-level design and get evidence-based feedback on your decisions.</p></div><span className="list-count">{problems.length ? `${filtered.length} available` : ""}</span></div>{error && <p className="error-message" role="alert">{error}</p>}{loading ? <LoadingRows /> : filtered.length === 0 ? <p className="empty-state">No problems available yet</p> : <div className="problem-list" aria-label="Problems">{filtered.map((problem, index) => <button className="problem-row" key={problem._id} onClick={() => onSelect(problem._id)}><span className="problem-row__index">{String(index + 1).padStart(2, "0")}</span><span className="problem-row__main"><strong>{problem.title}</strong><span>{problem.tags.slice(0, 2).join(" · ")}</span></span><StatusPill tone={problem.difficulty.toLowerCase()}>{problem.difficulty}</StatusPill><span className="problem-row__stats"><small>Attempts</small><strong>{attemptCounts[problem._id] ?? "—"}</strong></span><span className="problem-row__stats"><small>Best score</small><strong>{bestScores[problem._id] ? `${bestScores[problem._id]}/5` : "—"}</strong></span><span className="row-arrow" aria-hidden="true">↗</span></button>)}</div>}</main>;
 }
 
-function LoadingRows() {
-  return <div className="problem-list" aria-label="Loading problems">{[1, 2, 3, 4, 5].map((row) => <div className="skeleton-row" key={row}><span /><span /><span /><span /></div>)}</div>;
-}
+function LoadingRows() { return <div className="problem-list" aria-label="Loading problems">{[1, 2, 3, 4, 5].map((row) => <div className="skeleton-row" key={row}><span /><span /><span /><span /></div>)}</div>; }
 
-function Workspace({ problemId, onBack }: { problemId: string; onBack: () => void }) {
-  const [problem, setProblem] = useState<Problem | null>(null);
-  const [content, setContent] = useState(scaffold);
-  const [attemptId, setAttemptId] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
-  const [error, setError] = useState("");
-  const [requirementsOpen, setRequirementsOpen] = useState(true);
-  const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
-  const missingSections = useMemo(() => requiredSections.filter((section) => !sectionHasContent(content, section)), [content]);
-  const canSubmit = missingSections.length === 0 && !submitted;
-
-  useEffect(() => { getProblem(problemId).then(setProblem).catch((cause: Error) => setError(cause.message)); }, [problemId]);
-  useEffect(() => { if (content !== scaffold) setRequirementsOpen(false); }, [content]);
-
-  async function handleSubmit() {
-    if (!canSubmit) return;
-    try {
-      setError("");
-      const attempt = await startAttempt(problemId);
-      setAttemptId(attempt._id);
-      await submitDesign(attempt._id, content);
-      setSubmitted(true);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Submission failed");
-    }
-  }
-
+function Workspace({ problemId, onBack, onSubmitted }: { problemId: string; onBack: () => void; onSubmitted: (submissionId: string) => void }) {
+  const [problem, setProblem] = useState<Problem | null>(null); const [content, setContent] = useState(scaffold); const [error, setError] = useState(""); const [requirementsOpen, setRequirementsOpen] = useState(true); const [submitting, setSubmitting] = useState(false);
+  const missing = useMemo(() => requiredSections.filter((section) => !sectionHasContent(content, section)), [content]); const canSubmit = missing.length === 0 && !submitting; const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+  useEffect(() => { getProblem(problemId).then(setProblem).catch((cause: Error) => setError(cause.message)); }, [problemId]); useEffect(() => { if (content !== scaffold) setRequirementsOpen(false); }, [content]);
+  async function handleSubmit() { if (!canSubmit) return; try { setSubmitting(true); const attempt = await startAttempt(problemId); const submission = await submitDesign(attempt._id, content); onSubmitted(submission.submissionId); } catch (cause) { setError(cause instanceof Error ? cause.message : "Submission failed"); setSubmitting(false); } }
   if (!problem) return <main className="primary-surface workspace-surface"><div className="loading-line" />{error && <p className="error-message">{error}</p>}</main>;
-  return (
-    <main className="primary-surface workspace-surface">
-      <button className="back-link" onClick={onBack}>← All problems</button>
-      <div className="workspace-heading"><div><span className="eyebrow">{problem.difficulty} problem</span><h1>{problem.title}</h1></div><StatusPill tone={problem.difficulty.toLowerCase()}>{problem.difficulty}</StatusPill></div>
-      <Panel className={`requirements-panel ${requirementsOpen ? "requirements-panel--open" : ""}`}>
-        <button className="requirements-toggle" onClick={() => setRequirementsOpen(!requirementsOpen)} aria-expanded={requirementsOpen}><span>Requirements</span><span>{requirementsOpen ? "Hide" : "Show"}</span></button>
-        {requirementsOpen && <div className="requirements-content"><p>{problem.requirementsMd}</p><ul>{problem.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}</ul></div>}
-      </Panel>
-      <div className="editor-header"><div><span className="eyebrow">Your design</span><h2>Write the reviewable version</h2></div><span className="word-count">{wordCount} words</span></div>
-      <Textarea value={content} onChange={(event) => setContent(event.target.value)} aria-label="Design submission" spellCheck={false} />
-      <div className="editor-footer"><div aria-live="polite">{missingSections.length > 0 && <span className="hint">Missing: {missingSections.join(", ")}</span>}{submitted && <span className="success-message">Design submitted for evaluation.</span>}{error && <span className="error-message">{error}</span>}</div><Button onClick={handleSubmit} disabled={!canSubmit}>{submitted ? "Submitted" : "Submit design"}</Button></div>
-      {attemptId && <span className="submission-note">Attempt created · submission queued</span>}
-    </main>
-  );
+  return <main className="primary-surface workspace-surface"><button className="back-link" onClick={onBack}>← All problems</button><div className="workspace-heading"><div><span className="eyebrow">{problem.difficulty} problem</span><h1>{problem.title}</h1></div><StatusPill tone={problem.difficulty.toLowerCase()}>{problem.difficulty}</StatusPill></div><Panel className="requirements-panel"><button className="requirements-toggle" onClick={() => setRequirementsOpen(!requirementsOpen)} aria-expanded={requirementsOpen}><span>Requirements</span><span>{requirementsOpen ? "Hide" : "Show"}</span></button>{requirementsOpen && <div className="requirements-content"><p>{problem.requirementsMd}</p><ul>{problem.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}</ul></div>}</Panel><div className="editor-header"><div><span className="eyebrow">Your design</span><h2>Write the reviewable version</h2></div><span className="word-count">{wordCount} words</span></div><Textarea value={content} onChange={(event) => setContent(event.target.value)} aria-label="Design submission" spellCheck={false} /><div className="editor-footer"><div aria-live="polite">{missing.length > 0 && <span className="hint">Missing: {missing.join(", ")}</span>}{error && <span className="error-message">{error}</span>}</div><Button onClick={handleSubmit} disabled={!canSubmit}>{submitting ? "Submitting" : "Submit design"}</Button></div></main>;
 }
 
-function sectionHasContent(text: string, section: string) {
-  const marker = `## ${section}`;
-  const start = text.indexOf(marker);
-  if (start === -1) return false;
-  const nextHeading = text.indexOf("\n## ", start + marker.length);
-  return text.slice(start + marker.length, nextHeading === -1 ? text.length : nextHeading).trim().length > 0;
+function SubmissionStatusScreen({ submissionId, onFeedback, onNewAttempt }: { submissionId: string; onFeedback: (evaluation: Evaluation) => void; onNewAttempt: () => void }) {
+  const [status, setStatus] = useState<SubmissionStatus | null>(null); const [elapsed, setElapsed] = useState(0); const [retrying, setRetrying] = useState(false); const [error, setError] = useState(""); const [pollVersion, setPollVersion] = useState(0);
+  useEffect(() => { let active = true; let timer: number | undefined; const started = Date.now(); const poll = async () => { try { const next = await getSubmissionStatus(submissionId); if (!active) return; setStatus(next); const seconds = Math.floor((Date.now() - started) / 1000); setElapsed(seconds); if (next.status === "Completed" && next.evaluation) { onFeedback(next.evaluation); return; } if (next.status === "Failed" || seconds >= 30) return; timer = window.setTimeout(poll, 2000); } catch (cause) { if (active) setError(cause instanceof Error ? cause.message : "Could not read submission status"); } }; void poll(); return () => { active = false; if (timer) window.clearTimeout(timer); }; }, [submissionId, pollVersion, onFeedback]);
+  async function handleRetry() { try { setRetrying(true); setError(""); await retryEvaluation(submissionId); setStatus({ status: "Evaluating" }); setElapsed(0); setPollVersion((version) => version + 1); } catch (cause) { setError(cause instanceof Error ? cause.message : "Retry failed"); } finally { setRetrying(false); } }
+  const deterministic = status?.failureReason?.startsWith("Missing section") || status?.failureReason?.includes("150 words");
+  return <main className="primary-surface centered-surface"><StatusPill tone={status?.status?.toLowerCase() ?? "neutral"}>{status?.status ?? "Submitted"}</StatusPill><h1>{status?.status === "Failed" ? (deterministic ? "Design needs another attempt" : "Evaluation failed") : status?.status === "Evaluating" ? "Reviewing your design" : "Checking structure"}</h1><p>{status?.status === "Failed" ? (deterministic ? status.failureReason : "Evaluation failed, temporary issue.") : elapsed >= 30 ? "This is taking longer than usual. The evaluation is still working." : status?.status === "Evaluating" ? "The evaluator is reviewing your design." : "Your submission was received."}</p>{error && <p className="error-message">{error}</p>}{status?.status === "Failed" && <Button onClick={deterministic ? onNewAttempt : handleRetry} disabled={retrying}>{deterministic ? "Start new attempt" : retrying ? "Retrying" : "Retry evaluation"}</Button>}</main>;
 }
+
+function FeedbackScreen({ evaluation, onTryAgain }: { evaluation: Evaluation; onTryAgain: () => void }) {
+  const scores = evaluation.dimensionScores ?? []; const lowConfidence = typeof evaluation.confidence === "number" && evaluation.confidence < 0.6;
+  return <main className="primary-surface feedback-surface"><div className="feedback-heading"><div><span className="eyebrow">Evaluation complete</span><h1>Design review</h1></div><Button variant="secondary" onClick={onTryAgain}>Try again</Button></div>{lowConfidence && <p className="confidence-note">This evaluation has lower confidence than usual — treat the scores as a rough signal</p>}<div className="feedback-grid"><div className="dimension-list">{rubricOrder.map((dimension) => { const score = scores.find((item) => item.dimension === dimension); return <DimensionRow key={dimension} dimension={dimension} score={score} />; })}</div><Panel className="summary-panel"><span className="eyebrow">Overall summary</span><p>{evaluation.overallSummary}</p><span className="eyebrow">Confidence</span><strong>{Math.round((evaluation.confidence ?? 0) * 100)}%</strong></Panel></div></main>;
+}
+
+function DimensionRow({ dimension, score }: { dimension: string; score?: { score: number; evidence: string; concern?: string; suggestion: string } }) { const band = !score ? "neutral" : score.score >= 4 ? "strong" : score.score === 3 ? "watch" : "weak"; return <Panel className="dimension-row"><div className="dimension-row__header"><strong>{dimension}</strong><StatusPill tone={band}>{score ? `${score.score}/5 · ${band === "strong" ? "Strong" : band === "watch" ? "Watch" : "Weak"}` : "Not scored"}</StatusPill></div>{score && <><blockquote>{score.evidence}</blockquote>{score.concern && <p><b>Concern:</b> {score.concern}</p>}<p><b>Suggestion:</b> {score.suggestion}</p></>}</Panel>; }
+
+function HistoryScreen({ onSelect }: { onSelect: (id: string) => void }) {
+  const [scope, setScope] = useState<"all" | "problem">("all"); const [problemId, setProblemId] = useState(""); const [problems, setProblems] = useState<Problem[]>([]); const [attempts, setAttempts] = useState<Awaited<ReturnType<typeof getAttempts>> | null>(null); const [error, setError] = useState("");
+  useEffect(() => { getProblems().then(setProblems).catch(() => undefined); }, []); useEffect(() => { if (scope === "problem" && !problemId) { setAttempts([]); return; } getAttempts(scope === "problem" ? problemId : undefined).then(setAttempts).catch((cause: Error) => setError(cause.message)); }, [scope, problemId]);
+  return <main className="primary-surface history-surface"><div className="page-intro"><div><span className="eyebrow">Progression</span><h1>Attempt history</h1></div><div className="history-controls"><div className="segmented"><button className={scope === "all" ? "selected" : ""} onClick={() => setScope("all")}>All problems</button><button className={scope === "problem" ? "selected" : ""} onClick={() => setScope("problem")}>This problem</button></div>{scope === "problem" && <select value={problemId} onChange={(event) => setProblemId(event.target.value)}><option value="">Choose a problem</option>{problems.map((problem) => <option key={problem._id} value={problem._id}>{problem.title}</option>)}</select>}</div></div>{error && <p className="error-message">{error}</p>}{attempts?.length === 0 ? <p className="empty-state">No attempts yet — start with a problem from the list,</p> : <div className="history-table-wrap"><table className="history-table"><thead><tr><th>Problem</th><th>Date</th><th>Status</th><th>Dimensions</th></tr></thead><tbody>{attempts?.map((attempt) => <tr key={attempt._id}><td><button className="table-link" onClick={() => onSelect(attempt.problem?._id ?? attempt.problemId)}>{attempt.problem?.title ?? "Problem"}</button></td><td>{new Date(attempt.startedAt).toLocaleDateString()}</td><td><StatusPill tone={attempt.status.toLowerCase()}>{attempt.status}</StatusPill></td><td><div className="mini-indicators">{rubricOrder.map((dimension) => { const score = attempt.evaluation?.dimensionScores?.find((item) => item.dimension === dimension)?.score; return <span key={dimension} className={`mini-indicator ${score ? scoreBand(score) : "none"}`} title={`${dimension}: ${score ? `${score}/5` : "Not scored"}`} />; })}</div></td></tr>)}</tbody></table></div>}</main>;
+}
+
+function scoreBand(score: number) { return score >= 4 ? "strong" : score === 3 ? "watch" : "weak"; }
+function sectionHasContent(text: string, section: string) { const marker = `## ${section}`; const start = text.indexOf(marker); if (start === -1) return false; const nextHeading = text.indexOf("\n## ", start + marker.length); return text.slice(start + marker.length, nextHeading === -1 ? text.length : nextHeading).trim().length > 0; }
